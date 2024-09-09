@@ -278,8 +278,8 @@ class TorchDevice:
         if donate[0]: inputs.delete()
 
         # output embedding
-        logits = F.linear(hidden, w_token.data)
-        last_token_logits = logits[:,-1,:]
+        logits = F.linear(hidden[:,-1,:], w_token.data)
+        last_token_logits = logits#[:,-1,:]
 
         if do_sample and not temperature < 1e-5:
             probs = torch.softmax(last_token_logits / temperature, dim=-1)
@@ -334,6 +334,7 @@ class TorchDevice:
         if warmup:
             w_q.data, w_k.data = skew(q, k, w_q.data, w_k.data, n_head, head_dim)
 
+        """
         # shape: (b * n_head, s, head_dim)
         q = q.permute(0, 2, 1, 3).reshape(b * n_head, s, head_dim)
         # shape: (b * n_head, head_dim, s)
@@ -355,9 +356,21 @@ class TorchDevice:
         attn_weights = attn_weights.view(b * n_head, s, s)
         attn_weights = F.softmax(attn_weights, dim=2)
         # shape: (b, n_head, s, head_dim)
-        value = torch.bmm(attn_weights, v).view(b, n_head, s, head_dim)
+        value = torch.bmm(attn_weights, v).view(b, n_head, s, head_dim).transpose(1, 2)
+        """
+        
+        value = torch.nn.functional.scaled_dot_product_attention(
+            q, k, v, is_causal=True, scale=1.0
+        )
+        # shape: (b * n_head, s, head_dim)
+        q = q.permute(0, 2, 1, 3).reshape(b * n_head, s, head_dim)
+        # shape: (b * n_head, head_dim, s)
+        k = k.permute(0, 2, 3, 1).reshape(b * n_head, head_dim, s)
+        # shape: (b * n_head, s, head_dim)
+        v = v.permute(0, 2, 1, 3).reshape(b * n_head, s, head_dim)
+        
         # shape: (b, s, h)
-        value = value.transpose(1, 2).reshape(b, s, h)
+        value = value.reshape(b, s, h)
         value = F.linear(value, w_out.data, bias=b_out.data)
 
         value.add_(inputs.data)
